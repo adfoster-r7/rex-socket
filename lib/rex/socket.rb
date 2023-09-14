@@ -680,20 +680,29 @@ module Socket
     threads = []
     mutex   = ::Mutex.new
 
+    $stderr.puts "[main] creating a new thread"
     threads << Rex::ThreadFactory.spawn('TcpSocketPair', false) do
       server = nil
       begin
+        $stderr.puts "[parent] inside thread"
         mutex.synchronize do
+          $stderr.puts "[parent] inside parent synchronize, no child thread yet!"
           threads << Rex::ThreadFactory.spawn('TcpSocketPairClient', false) do
+            $stderr.puts "[child] waiting for the parent to finish now"
             mutex.synchronize do
               begin
+                $stderr.puts "child synchronize connecting to #{laddr}:#{lport}"
                 rsock = ::TCPSocket.new( laddr, lport )
+                $stderr.puts "[child] I connected to rsock I think"
               rescue => e
+                $stderr.puts "[child] I threw an excption #{e} - #{e.class}"
                 last_child_error = "#{e.class} - #{e.message}"
                 raise
               end
             end
+            $stderr.puts "[child] no longer in synchronize"
           end
+          $stderr.puts "[parent] creating tcp server"
           server = ::TCPServer.new(laddr, 0)
           if (server.getsockname =~ /127\.0\.0\.1:/)
             # JRuby ridiculousness
@@ -705,11 +714,21 @@ module Socket
             # sockaddr
             lport, caddr = ::Socket.unpack_sockaddr_in( server.getsockname )
           end
+          $stderr.puts "[parent] about to exit parent synchronize"
         end
 
+        $stderr.puts "[parent] Server waiting for select #{laddr}:#{lport}"
         readable, _writable, _errors = ::IO.select([server], nil, nil, accept_timeout)
         if readable && readable.any?
-          lsock, _ = server.accept_nonblock
+          $stderr.puts "[parent] Server waiting for accept on #{laddr}:#{lport}"
+          begin
+            lsock, _ = server.accept_nonblock
+          rescue => e
+            $stderr.puts "[parent] Got an explosion #{e}"
+            raise
+          end
+
+          $stderr.puts "[parent] Got a connection #{laddr}:#{lport}"
         else
           raise RuntimeError, "rsock didn't connect in #{accept_timeout} seconds"
         end
@@ -718,12 +737,16 @@ module Socket
       end
     end
 
+    $stderr.puts "[main] before joining"
     threads.each.with_index do |thread, i|
+      $stderr.puts "[main] waiting on a thread #{i} to join"
       thread.join
+      $stderr.puts "[main] the thread #{i} joined"
     rescue => e
       raise "Thread #{i} - error #{e} - last child error: #{last_child_error}"
     end
 
+    $stderr.puts "[parent] Server waiting for accept on #{laddr}:#{lport}"
     return [lsock, rsock]
   end
 
